@@ -1,6 +1,6 @@
 # NuxtClean
 
-A small static analysis tool called **NuxtClean** can help you remove unnecessary code from your [Nuxt 3](https://nuxt.com/) (Vue 3) projects.
+A small static analysis tool can help you remove detect unecessary code from your [Nuxt 3](https://nuxt.com/) (Vue 3) projects.
 
 It looks through your codebase to find:
 
