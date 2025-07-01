@@ -31,4 +31,5 @@ cd NuxtClean && python nuxt_clean.py --path /path/to/your/nuxt-project
 
 
 ### Demo
-![Demo](demo.mp4)
+![Demo](demo.gif)
+
