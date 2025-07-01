@@ -14,7 +14,7 @@ A tool for Nuxt (Vue 3) developers to detect:
 It scans through .vue, .js, .ts, .css, .scss, and .sass files
 """
 
-import re
+import re, csv
 from pathlib import Path
 
 # File types to search
@@ -189,6 +189,26 @@ def find_unused_imports(project_path):
 
     return unused_imports
 
+# Export, unused css, console logs, dead exports, and unused imports to a master CSV file
+def export_all_to_master_csv(css_classes, console_logs, dead_exports, unused_imports, output_path="nuxtclean_report.csv"):
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Type", "File", "Line Number", "Code"])
+
+        for cls in css_classes:
+            writer.writerow(["Unused CSS", "", "", f".{cls}"])
+
+        for level, logs in console_logs.items():
+            for file, line, statement in logs:
+                writer.writerow([f"Console {level}", str(file), line, statement])
+
+        for file, name in dead_exports:
+            writer.writerow(["Dead Export", str(file), "", name])
+
+        for file, line, name in unused_imports:
+            writer.writerow(["Unused Import", str(file), line, name])
+
+    print(f"\n Exported full report to {output_path}")
 
 
 # ----------------- CLI Runner -----------------
@@ -229,9 +249,9 @@ if __name__ == "__main__":
 
 
     print("\n Dead Code (Unused Exports):\n")
-    dead_code = find_dead_code_exports(project_path)
-    if dead_code:
-        for filepath, name in dead_code:
+    dead_exports = find_dead_code_exports(project_path)
+    if dead_exports:
+        for filepath, name in dead_exports:
             print(f"  - {filepath}: {name}")
     else:
         print(" No unused exports found.")
@@ -244,3 +264,12 @@ if __name__ == "__main__":
             print(f"  - {filepath} [line {lineno}]: {name}")
     else:
         print(" All named imports appear to be used.")
+        
+        
+    export_all_to_master_csv(
+        unused_classes,
+        console_logs,
+        dead_exports,
+        unused_imports,
+        output_path="nuxtclean_report.csv"
+    )
