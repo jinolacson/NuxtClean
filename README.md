@@ -25,6 +25,6 @@ A clean codebase loads more quickly, is lighter to ship, and is easier to mainta
 ### 1. Clone or copy the script
 
 ```
-git clone https://github.com/your-username/nuxt-clean
+git clone https://github.com/your-username/NuxtClean
 cd NuxtClean && python nuxt_clean.py --path /path/to/your/nuxt-project
 ```
