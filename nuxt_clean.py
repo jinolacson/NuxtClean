@@ -269,7 +269,7 @@ def find_all_unused_variables(project_path):
 
 
 # Create report
-def export_all_to_master_csv(css_classes, console_logs, dead_exports, unused_imports, unused_packages, unused_variables, output_path="nuxtclean_report.csv"):
+def export_all_to_master_csv(css_classes, console_logs, dead_exports, unused_imports, unused_packages, unused_variables, output_path="reports/nuxtclean_report.csv"):
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["Type", "File", "Line Number", "Code"])
@@ -304,7 +304,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Detect unused CSS classes, packages, variables, and search for console logs in a Nuxt project"
     )
-    parser.add_argument("--path", required=True, help="")
+    parser.add_argument("--path", required=True, help="Path to the Nuxt project directory")
 
     args = parser.parse_args()
     project_path = args.path
@@ -374,5 +374,5 @@ if __name__ == "__main__":
         unused_imports,
         unused_packages,
         unused_vars,
-        output_path="nuxtclean_report.csv"
+        output_path="nuxt_clean_report.csv"
     )
