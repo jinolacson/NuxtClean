@@ -14,7 +14,7 @@ A tool for Nuxt (Vue 3) developers to detect:
 It scans through .vue, .js, .ts, .css, .scss, and .sass files
 """
 
-import re, csv
+import re, csv, json
 from pathlib import Path
 
 # File types to search
@@ -189,8 +189,87 @@ def find_unused_imports(project_path):
 
     return unused_imports
 
-# Export, unused css, console logs, dead exports, and unused imports to a master CSV file
-def export_all_to_master_csv(css_classes, console_logs, dead_exports, unused_imports, output_path="nuxtclean_report.csv"):
+def find_unused_packages(project_path):
+    pkg_json_path = Path(project_path) / "package.json"
+    if not pkg_json_path.exists():
+        print("  No package.json found.")
+        return []
+
+    with pkg_json_path.open(encoding="utf-8") as f:
+        pkg_data = json.load(f)
+
+    # Combine dependencies and devDependencies
+    dependencies = pkg_data.get("dependencies", {})
+    dev_dependencies = pkg_data.get("devDependencies", {})
+    all_packages = list(dependencies.keys()) + list(dev_dependencies.keys())
+
+    # Get all code files where packages may be imported
+    code_files = get_all_files(project_path, [".js", ".ts", ".vue"])
+    all_code = ""
+    for file in code_files:
+        try:
+            text = file.read_text(encoding="utf-8")
+            all_code += text + "\n"
+        except Exception as e:
+            print(f"Failed to read {file}: {e}")
+
+    unused = []
+    for pkg in all_packages:
+        # Escape special characters in package name (like @)
+        pattern = re.compile(rf"(from\s+['\"]{re.escape(pkg)}['\"]|require\(['\"]{re.escape(pkg)}['\"]\))")
+        if not pattern.search(all_code):
+            unused.append(pkg)
+
+    return sorted(unused)
+
+
+def find_unused_variables_in_file(file_path):
+    """
+    Detect variables declared with const, let, or var that are never used.
+    Only works for JS, TS, and <script> blocks in .vue files.
+    """
+    try:
+        text = Path(file_path).read_text(encoding="utf-8")
+    except Exception as e:
+        print(f" Failed to read {file_path}: {e}")
+        return []
+
+    # Extract only <script> content if it's a Vue file
+    if file_path.suffix == ".vue":
+        match = re.search(r"<script[^>]*>(.*?)</script>", text, re.DOTALL)
+        if match:
+            text = match.group(1)
+        else:
+            return []
+
+    # Find all variable declarations
+    decl_pattern = re.compile(r"\b(?:const|let|var)\s+([a-zA-Z_$][\w$]*)")
+    declared = decl_pattern.findall(text)
+
+    unused_vars = []
+    for var in declared:
+        # Match word boundaries, ignore the declaration line
+        var_usage_pattern = re.compile(rf"\b{re.escape(var)}\b")
+        matches = var_usage_pattern.findall(text)
+
+        if len(matches) <= 1:
+            unused_vars.append(var)
+
+    return unused_vars
+
+# wrapper of find_unused_variables_in_file() function
+def find_all_unused_variables(project_path):
+    unused_vars = []
+    code_files = get_all_files(project_path, [".js", ".ts", ".vue"])
+    for file in code_files:
+        result = find_unused_variables_in_file(file)
+        for var in result:
+            unused_vars.append((file, var))
+    return unused_vars
+
+
+# Create report
+def export_all_to_master_csv(css_classes, console_logs, dead_exports, unused_imports, unused_packages, unused_variables, output_path="nuxtclean_report.csv"):
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["Type", "File", "Line Number", "Code"])
@@ -208,6 +287,12 @@ def export_all_to_master_csv(css_classes, console_logs, dead_exports, unused_imp
         for file, line, name in unused_imports:
             writer.writerow(["Unused Import", str(file), line, name])
 
+        for pkg in unused_packages:
+            writer.writerow(["Unused Package", "package.json", "", pkg])
+        
+        for file, var in unused_variables:
+            writer.writerow(["Unused Variable", str(file), "", var])
+
     print(f"\n Exported full report to {output_path}")
 
 
@@ -217,7 +302,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Detect unused CSS classes, console logs, and dead code in a Nuxt project"
+        description="Detect unused CSS classes, packages, variables, and search for console logs in a Nuxt project"
     )
     parser.add_argument("--path", required=True, help="")
 
@@ -264,12 +349,30 @@ if __name__ == "__main__":
             print(f"  - {filepath} [line {lineno}]: {name}")
     else:
         print(" All named imports appear to be used.")
-        
-        
+    
+    
+    print("\n  Unused NPM Packages:\n")
+    unused_packages = find_unused_packages(project_path)
+    if unused_packages:
+        for pkg in unused_packages:
+            print(f"  - {pkg}")
+    else:
+        print(" All dependencies appear to be used.")
+    
+    print("\n  Unused Variables:\n")
+    unused_vars = find_all_unused_variables(project_path)
+    if unused_vars:
+        for filepath, var in unused_vars:
+            print(f"  - {filepath}: {var}")
+    else:
+        print("  All declared variables appear to be used.")
+    
     export_all_to_master_csv(
         unused_classes,
         console_logs,
         dead_exports,
         unused_imports,
+        unused_packages,
+        unused_vars,
         output_path="nuxtclean_report.csv"
     )

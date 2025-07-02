@@ -8,6 +8,8 @@ It looks through your codebase to find:
 - 🔹 **Unused named imports** (`import { foo } from...`)
 - 🔹 **Dead exports** (such as functions that are exported but never used)
 - 🔹 **Forgotten console logs** (`console.log`, `console.warn`, `console.error`)
+- 🔹 **Unused variables**  
+- 🔹 **Unused packages**  
 
 ---
 
