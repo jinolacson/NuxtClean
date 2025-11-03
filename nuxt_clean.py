@@ -374,5 +374,5 @@ if __name__ == "__main__":
         unused_imports,
         unused_packages,
         unused_vars,
-        output_path="nuxt_clean_report.csv"
+        output_path="reports/nuxt_clean_report.csv"
     )
