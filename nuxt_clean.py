@@ -2,7 +2,7 @@
 Developer: leetz-kowd
 Project: NuxtClean
 Date: 2023-10-30
-Version: 1.0.0
+Version: 1.0.1 (Variable Detection Fix)
 
 Description:
 A tool for Nuxt (Vue 3) developers to detect:
@@ -10,8 +10,7 @@ A tool for Nuxt (Vue 3) developers to detect:
 - Console.log / warn / error debug statements
 - Dead code (unused exports)
 - Unused named imports
-
-It scans through .vue, .js, .ts, .css, .scss, and .sass files
+- Unused variables (local and global)
 """
 
 import re, csv, json
@@ -244,61 +243,20 @@ def find_unused_packages(project_path):
     return sorted(unused)
 
 
-def find_unused_variables_in_file(file_path):
-    """
-    Detect variables declared with const, let, or var that are never used.
-    Only works for JS, TS, and <script> blocks in .vue files.
-    """
-    try:
-        full_text = Path(file_path).read_text(encoding="utf-8")
-    except Exception as e:
-        print(f" Failed to read {file_path}: {e}")
-        return []
-
-    # For Vue files, extract both script and template
-    if file_path.suffix == ".vue":
-        script_match = re.search(r"<script[^>]*>(.*?)</script>", full_text, re.DOTALL)
-        template_match = re.search(r"<template[^>]*>(.*?)</template>", full_text, re.DOTALL)
-        
-        if not script_match:
-            return []
-        
-        script_content = script_match.group(1)
-        template_content = template_match.group(1) if template_match else ""
-        
-        # Use the ENTIRE Vue file for searching, not just extracted parts
-        # This ensures we catch all usage including in attributes, props, etc.
-        text_to_search = full_text
-    else:
-        script_content = full_text
-        text_to_search = full_text
-
-    # Find all variable declarations in script
-    decl_pattern = re.compile(r"\b(?:const|let|var)\s+([a-zA-Z_$][\w$]*)\s*=")
-    declared = decl_pattern.findall(script_content)
-
-    unused_vars = []
-    for var in declared:
-        # Count occurrences in the entire file
-        var_usage_pattern = re.compile(rf"\b{re.escape(var)}\b")
-        matches = var_usage_pattern.findall(text_to_search)
-
-        # If found only once (just the declaration), it's unused
-        # We expect at least 2: one in declaration, one in usage
-        if len(matches) <= 1:
-            unused_vars.append(var)
-
-    return unused_vars
-
 def find_all_unused_variables(project_path):
     """
-    Find variables declared but not used anywhere in the entire project.
-    Uses global project-wide checking similar to find_unused_imports.
+    Find variables that are:
+    1. Not used in their own file (local unused)
+    2. Not used anywhere in the entire project (global unused)
+    
+    A variable is considered *used* if it appears more than once 
+    (one declaration + one or more usages).
     """
     code_files = get_all_files(project_path, [".js", ".ts", ".vue"])
     unused_vars = []
     
     script_block_pattern = re.compile(r'<script(?:\s+setup)?[^>]*>(.*?)</script>', re.DOTALL)
+    template_block_pattern = re.compile(r'<template[^>]*>(.*?)</template>', re.DOTALL)
     
     # First pass: collect all code content from entire project
     all_project_content = ""
@@ -306,48 +264,76 @@ def find_all_unused_variables(project_path):
         try:
             content = file.read_text(encoding="utf-8")
             
+            file_content = ""
             # For .vue files, extract script and template blocks
             if file.suffix == ".vue":
                 script_matches = script_block_pattern.findall(content)
-                template_match = re.search(r'<template[^>]*>(.*?)</template>', content, re.DOTALL)
+                template_match = template_block_pattern.search(content)
                 
-                file_content = "\n".join(script_matches)
+                file_content += "\n".join(script_matches)
                 if template_match:
                     file_content += "\n" + template_match.group(1)
-                
-                all_project_content += file_content + "\n"
             else:
-                all_project_content += content + "\n"
+                # For .js/.ts files, use full content
+                file_content = content
+                
+            all_project_content += file_content + "\n"
         except Exception as e:
             print(f"Failed to read {file}: {e}")
     
-    # Second pass: check each declared variable against ALL project content
+    # Second pass: check each declared variable
     for file in code_files:
         try:
             full_text = file.read_text(encoding="utf-8")
             
-            # Extract script content for finding declarations
+            # --- Determine Content for Declaration Finding ---
             if file.suffix == ".vue":
-                script_match = re.search(r"<script[^>]*>(.*?)</script>", full_text, re.DOTALL)
+                script_match = script_block_pattern.search(full_text)
                 if not script_match:
                     continue
                 script_content = script_match.group(1)
+                
+                # For local usage check, use both script and template content
+                template_match = template_block_pattern.search(full_text)
+                local_content = script_content
+                if template_match:
+                    local_content += "\n" + template_match.group(1)
             else:
                 script_content = full_text
+                local_content = full_text
             
             # Find all variable declarations
+            # Look for: const/let/var NAME = ... OR destructuring { NAME } = ...
             decl_pattern = re.compile(r"\b(?:const|let|var)\s+([a-zA-Z_$][\w$]*)\s*=")
             declared = decl_pattern.findall(script_content)
             
-            # Check each declared variable against entire project
-            for var in declared:
-                # Count occurrences in the ENTIRE project
+            # Add variables from object destructuring (simple case)
+            destruct_pattern = re.compile(r"\b(?:const|let|var)\s*\{([^}]+)\}\s*=")
+            for destruct_match in destruct_pattern.findall(script_content):
+                 declared.extend([d.strip() for d in destruct_match.split(',') if d.strip()])
+            
+            # Check each declared variable
+            for var in set(declared): # Use set to handle duplicates from destructuring/regex
                 var_usage_pattern = re.compile(rf"\b{re.escape(var)}\b")
-                matches = var_usage_pattern.findall(all_project_content)
                 
-                # If found only once (just the declaration), it's unused globally
-                if len(matches) <= 1:
-                    unused_vars.append((file, var))
+                # --- Check local usage (in same file) ---
+                local_matches = var_usage_pattern.findall(local_content)
+                # A variable is used if it appears more than once (Declaration + Usage)
+                local_used = len(local_matches) > 1
+                local_unused = not local_used
+                
+                # --- Check global usage (entire project) ---
+                global_matches = var_usage_pattern.findall(all_project_content)
+                global_used = len(global_matches) > 1
+                global_unused = not global_used
+                
+                # Add to report with appropriate scope
+                if global_unused:
+                    # Filter out common false positives for global check if they are imports/props
+                    # This simple tool won't perfectly handle scope, but prioritize global findings
+                    unused_vars.append((file.relative_to(project_path), var, "global"))
+                elif local_unused:
+                    unused_vars.append((file.relative_to(project_path), var, "local"))
         
         except Exception as e:
             print(f"Failed to process {file}: {e}")
@@ -359,26 +345,26 @@ def find_all_unused_variables(project_path):
 def export_all_to_master_csv(css_classes, console_logs, dead_exports, unused_imports, unused_packages, unused_variables, output_path="reports/nuxtclean_report.csv"):
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["Type", "File", "Line Number", "Code"])
+        writer.writerow(["Type", "File", "Line Number", "Code", "Scope"])
 
         for cls in css_classes:
-            writer.writerow(["Unused CSS", "", "", f".{cls}"])
+            writer.writerow(["Unused CSS", "", "", f".{cls}", ""])
 
         for level, logs in console_logs.items():
             for file, line, statement in logs:
-                writer.writerow([f"Console {level}", str(file), line, statement])
+                writer.writerow([f"Console {level}", str(file), line, statement, ""])
 
         for file, name in dead_exports:
-            writer.writerow(["Dead Export", str(file), "", name])
+            writer.writerow(["Dead Export", str(file), "", name, ""])
 
         for file, line, name in unused_imports:
-            writer.writerow(["Unused Import", str(file), line, name])
+            writer.writerow(["Unused Import", str(file), line, name, ""])
 
         for pkg in unused_packages:
-            writer.writerow(["Unused Package", "package.json", "", pkg])
+            writer.writerow(["Unused Package", "package.json", "", pkg, ""])
         
-        for file, var in unused_variables:
-            writer.writerow(["Unused Variable", str(file), "", var])
+        for file, var, scope in unused_variables:
+            writer.writerow(["Unused Variable", str(file), "", var, scope])
 
     print(f"\n Exported full report to {output_path}")
 
@@ -394,7 +380,7 @@ if __name__ == "__main__":
     parser.add_argument("--path", required=True, help="Path to the Nuxt project directory")
 
     args = parser.parse_args()
-    project_path = args.path
+    project_path = Path(args.path)
 
 
     print("\n Unused CSS Classes:\n")
@@ -449,8 +435,9 @@ if __name__ == "__main__":
     print("\n  Unused Variables:\n")
     unused_vars = find_all_unused_variables(project_path)
     if unused_vars:
-        for filepath, var in unused_vars:
-            print(f"  - {filepath}: {var}")
+        for filepath, var, scope in unused_vars:
+            scope_label = f"({scope})" if scope else ""
+            print(f"  - {filepath}: {var} {scope_label}")
     else:
         print("  All declared variables appear to be used.")
     
