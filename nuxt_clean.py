@@ -154,6 +154,28 @@ def find_unused_imports(project_path):
     import_pattern = re.compile(r'import\s+{([^}]+)}\s+from\s+[\'"][^\'"]+[\'"]')
     script_block_pattern = re.compile(r'<script(?:\s+setup)?[^>]*>(.*?)</script>', re.DOTALL)
 
+    # First pass: collect all code content from all files for global usage check
+    all_project_content = ""
+    for file in code_files:
+        try:
+            content = file.read_text(encoding="utf-8")
+            
+            # For .vue files, extract script and template blocks
+            if file.suffix == ".vue":
+                script_matches = script_block_pattern.findall(content)
+                template_match = re.search(r'<template[^>]*>(.*?)</template>', content, re.DOTALL)
+                
+                file_content = "\n".join(script_matches)
+                if template_match:
+                    file_content += "\n" + template_match.group(1)
+                
+                all_project_content += file_content + "\n"
+            else:
+                all_project_content += content + "\n"
+        except Exception as e:
+            print(f"Failed to read {file}: {e}")
+
+    # Second pass: check each import against ALL project content
     for file in code_files:
         try:
             content = file.read_text(encoding="utf-8")
@@ -165,23 +187,22 @@ def find_unused_imports(project_path):
                 if not script_matches:
                     continue
                 script_content = "\n".join(script_matches)
-                full_text = script_content
                 lines = script_content.splitlines()
             else:
-                full_text = content
                 lines = original_lines
 
-            # Go line-by-line to detect imports and whether they’re used
+            # Go line-by-line to detect imports
             for i, line in enumerate(lines, start=1):
                 match = import_pattern.search(line)
                 if match:
                     imported_names = [name.strip() for name in match.group(1).split(",")]
 
-                    # Remove the line from text to avoid false positive (import counts as usage)
-                    check_text = full_text.replace(line, "")
+                    # Remove the import line from global content to avoid false positive
+                    check_text = all_project_content.replace(line, "")
 
                     for name in imported_names:
-                        if not re.search(rf'\b{name}\b', check_text):
+                        # Check if used ANYWHERE in the project
+                        if not re.search(rf'\b{re.escape(name)}\b', check_text):
                             unused_imports.append((file.relative_to(project_path), i, name))
 
         except Exception as e:
@@ -229,42 +250,108 @@ def find_unused_variables_in_file(file_path):
     Only works for JS, TS, and <script> blocks in .vue files.
     """
     try:
-        text = Path(file_path).read_text(encoding="utf-8")
+        full_text = Path(file_path).read_text(encoding="utf-8")
     except Exception as e:
         print(f" Failed to read {file_path}: {e}")
         return []
 
-    # Extract only <script> content if it's a Vue file
+    # For Vue files, extract both script and template
     if file_path.suffix == ".vue":
-        match = re.search(r"<script[^>]*>(.*?)</script>", text, re.DOTALL)
-        if match:
-            text = match.group(1)
-        else:
+        script_match = re.search(r"<script[^>]*>(.*?)</script>", full_text, re.DOTALL)
+        template_match = re.search(r"<template[^>]*>(.*?)</template>", full_text, re.DOTALL)
+        
+        if not script_match:
             return []
+        
+        script_content = script_match.group(1)
+        template_content = template_match.group(1) if template_match else ""
+        
+        # Use the ENTIRE Vue file for searching, not just extracted parts
+        # This ensures we catch all usage including in attributes, props, etc.
+        text_to_search = full_text
+    else:
+        script_content = full_text
+        text_to_search = full_text
 
-    # Find all variable declarations
-    decl_pattern = re.compile(r"\b(?:const|let|var)\s+([a-zA-Z_$][\w$]*)")
-    declared = decl_pattern.findall(text)
+    # Find all variable declarations in script
+    decl_pattern = re.compile(r"\b(?:const|let|var)\s+([a-zA-Z_$][\w$]*)\s*=")
+    declared = decl_pattern.findall(script_content)
 
     unused_vars = []
     for var in declared:
-        # Match word boundaries, ignore the declaration line
+        # Count occurrences in the entire file
         var_usage_pattern = re.compile(rf"\b{re.escape(var)}\b")
-        matches = var_usage_pattern.findall(text)
+        matches = var_usage_pattern.findall(text_to_search)
 
+        # If found only once (just the declaration), it's unused
+        # We expect at least 2: one in declaration, one in usage
         if len(matches) <= 1:
             unused_vars.append(var)
 
     return unused_vars
 
-# wrapper of find_unused_variables_in_file() function
 def find_all_unused_variables(project_path):
-    unused_vars = []
+    """
+    Find variables declared but not used anywhere in the entire project.
+    Uses global project-wide checking similar to find_unused_imports.
+    """
     code_files = get_all_files(project_path, [".js", ".ts", ".vue"])
+    unused_vars = []
+    
+    script_block_pattern = re.compile(r'<script(?:\s+setup)?[^>]*>(.*?)</script>', re.DOTALL)
+    
+    # First pass: collect all code content from entire project
+    all_project_content = ""
     for file in code_files:
-        result = find_unused_variables_in_file(file)
-        for var in result:
-            unused_vars.append((file, var))
+        try:
+            content = file.read_text(encoding="utf-8")
+            
+            # For .vue files, extract script and template blocks
+            if file.suffix == ".vue":
+                script_matches = script_block_pattern.findall(content)
+                template_match = re.search(r'<template[^>]*>(.*?)</template>', content, re.DOTALL)
+                
+                file_content = "\n".join(script_matches)
+                if template_match:
+                    file_content += "\n" + template_match.group(1)
+                
+                all_project_content += file_content + "\n"
+            else:
+                all_project_content += content + "\n"
+        except Exception as e:
+            print(f"Failed to read {file}: {e}")
+    
+    # Second pass: check each declared variable against ALL project content
+    for file in code_files:
+        try:
+            full_text = file.read_text(encoding="utf-8")
+            
+            # Extract script content for finding declarations
+            if file.suffix == ".vue":
+                script_match = re.search(r"<script[^>]*>(.*?)</script>", full_text, re.DOTALL)
+                if not script_match:
+                    continue
+                script_content = script_match.group(1)
+            else:
+                script_content = full_text
+            
+            # Find all variable declarations
+            decl_pattern = re.compile(r"\b(?:const|let|var)\s+([a-zA-Z_$][\w$]*)\s*=")
+            declared = decl_pattern.findall(script_content)
+            
+            # Check each declared variable against entire project
+            for var in declared:
+                # Count occurrences in the ENTIRE project
+                var_usage_pattern = re.compile(rf"\b{re.escape(var)}\b")
+                matches = var_usage_pattern.findall(all_project_content)
+                
+                # If found only once (just the declaration), it's unused globally
+                if len(matches) <= 1:
+                    unused_vars.append((file, var))
+        
+        except Exception as e:
+            print(f"Failed to process {file}: {e}")
+    
     return unused_vars
 
 
